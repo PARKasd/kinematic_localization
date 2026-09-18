@@ -7,10 +7,10 @@ upstream ROS packages in these trees.
 
 | Component | Upstream | Pinned revision | License |
 | --- | --- | --- | --- |
-| Kinematic-ICP | [PRBonn/kinematic-icp](https://github.com/PRBonn/kinematic-icp) | `d5b513e7a4822362e8307fbed5ff52f0b502a9eb` | [MIT](third_party/kinematic-icp/LICENSE) |
-| KISS-ICP | [PRBonn/kiss-icp](https://github.com/PRBonn/kiss-icp) | `74c1fe8f0c1da91124b81afebe57cf4d828658ea` (`v1.2.0`) | [MIT](third_party/kiss-icp/LICENSE) |
-| Sophus | [strasdat/Sophus](https://github.com/strasdat/Sophus) | `de0f8d3d92bf776271e16de56d1803940ebccab9` (`1.22.10`) | [MIT](third_party/sophus/LICENSE.txt) |
-| robin-map | [Tessil/robin-map](https://github.com/Tessil/robin-map) | `d37a41003bfbc7e12e34601f93c18ca2ff6d7c07` (`v1.2.1`) | [MIT](third_party/robin-map/LICENSE) |
+| Kinematic-ICP | [PRBonn/kinematic-icp](https://github.com/PRBonn/kinematic-icp) | `d5b513e7a4822362e8307fbed5ff52f0b502a9eb` | [MIT](https://github.com/PRBonn/kinematic-icp/blob/d5b513e7a4822362e8307fbed5ff52f0b502a9eb/LICENSE) |
+| KISS-ICP | [PRBonn/kiss-icp](https://github.com/PRBonn/kiss-icp) | `74c1fe8f0c1da91124b81afebe57cf4d828658ea` (`v1.2.0`) | [MIT](https://github.com/PRBonn/kiss-icp/blob/74c1fe8f0c1da91124b81afebe57cf4d828658ea/LICENSE) |
+| Sophus | [strasdat/Sophus](https://github.com/strasdat/Sophus) | `de0f8d3d92bf776271e16de56d1803940ebccab9` (`1.22.10`) | [MIT](https://github.com/strasdat/Sophus/blob/de0f8d3d92bf776271e16de56d1803940ebccab9/LICENSE.txt) |
+| robin-map | [Tessil/robin-map](https://github.com/Tessil/robin-map) | `d37a41003bfbc7e12e34601f93c18ca2ff6d7c07` (`v1.2.1`) | [MIT](https://github.com/Tessil/robin-map/blob/d37a41003bfbc7e12e34601f93c18ca2ff6d7c07/LICENSE) |
 
 ## Initialize and build
 
