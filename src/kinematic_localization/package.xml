@@ -24,7 +24,7 @@
   <depend>rosbag2_cpp</depend>
   <depend>rosbag2_storage</depend>
 
-  <!-- CPP core dependencies (fetched via FetchContent when not on the system) -->
+  <!-- System dependencies for the C++ core; remaining sources are submodules. -->
   <depend>eigen</depend>
   <depend>tbb</depend>
 

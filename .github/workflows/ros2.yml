@@ -17,9 +17,12 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - name: Install dependencies
         run: |
           apt-get update
+          apt-get install -y patch
           rosdep update --rosdistro jazzy
           rosdep install --from-paths src --ignore-src --rosdistro jazzy -r -y
       - name: Build

@@ -16,7 +16,7 @@ Keep the single-threaded executor: callback state is intentionally lock-free.
 Registration priors and output stamps refer to scan end. Never clamp or extrapolate
 odometry for registration; wait for bracketing samples, then drop on timeout.
 Keep NaN guards, frozen-map behavior, registration diagnostics, source-only voxel
-downsampling and optional lateral motion patches in the vendored core.
+downsampling and optional lateral motion changes in the tracked core patch.
 Output smoothing must not feed back into the registration pose or accumulated map.
 Keep tilt configuration consistent between localization and mapping when making a
 map from fast-driving data. Vehicle-specific gains require calibration.

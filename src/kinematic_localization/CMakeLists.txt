@@ -1,13 +1,7 @@
 cmake_minimum_required(VERSION 3.16...3.26)
 project(kinematic_localization LANGUAGES CXX)
 
-# Vendored kinematic-icp core (third_party/kinematic-icp). Sophus and
-# tsl-robin-map are not installable system-wide (no sudo/apt), so force the
-# FetchContent path of the underlying kiss-icp dependency.
-set(USE_SYSTEM_SOPHUS OFF CACHE BOOL "Fetch Sophus instead of system package" FORCE)
-set(USE_SYSTEM_TSL-ROBIN-MAP OFF CACHE BOOL "Fetch tsl-robin-map instead of system package" FORCE)
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/kinematic-icp/cpp/kinematic_icp
-                 ${CMAKE_CURRENT_BINARY_DIR}/kinematic_icp_core)
+include("${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/Dependencies.cmake")
 
 find_package(ament_cmake REQUIRED)
 find_package(ament_index_cpp REQUIRED)

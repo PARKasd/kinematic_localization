@@ -57,12 +57,12 @@ method and evaluation, and [third-party notes](THIRD_PARTY.md) for local patches
 ## Build
 
 Target: Ubuntu 24.04 with ROS 2 Jazzy, a C++17 compiler, `colcon`, and an initialized
-`rosdep`. Run these commands in Bash:
+`rosdep`, Git, and the `patch` utility. Run these commands in Bash:
 
 ```bash
 source /opt/ros/jazzy/setup.bash
 mkdir -p ~/kinematic_ws/src
-git clone https://github.com/PARKasd/kinematic_localization.git \
+git clone --recurse-submodules https://github.com/PARKasd/kinematic_localization.git \
   ~/kinematic_ws/src/kinematic_localization
 cd ~/kinematic_ws
 rosdep update
@@ -71,9 +71,25 @@ colcon build --symlink-install --packages-select kinematic_localization
 source install/setup.bash
 ```
 
-Kinematic-ICP, KISS-ICP, Sophus, and robin-map are vendored with license notices.
-Eigen and TBB are system dependencies installed through `rosdep`. After system
-dependencies are installed, the bundled C++ libraries need no download.
+Kinematic-ICP, KISS-ICP, Sophus, and robin-map are pinned Git submodules of their
+official upstream repositories. For an existing clone, initialize them with:
+
+```bash
+git submodule update --init --recursive
+```
+
+Run that command again after pulling changes that update dependency revisions.
+After changing dependency revisions, force CMake to regenerate patched sources:
+`colcon build --packages-select kinematic_localization --cmake-force-configure`.
+GitHub source ZIP archives do not include submodule contents; use a recursive clone.
+Eigen and TBB are system dependencies installed through `rosdep`; install `patch`
+with `sudo apt-get install patch` if it is missing. Once submodules and system
+dependencies are available, the C++ build needs no further downloads.
+
+The build applies the [localization patch](patches/kinematic-icp-localization.patch)
+and KISS-ICP's Sophus compatibility patch to copies in the build directory. It
+leaves the submodule working trees unchanged. See [THIRD_PARTY.md](THIRD_PARTY.md)
+for pins and patch maintenance.
 
 ## Prepare a map
 
@@ -192,7 +208,7 @@ and checks node startup. These checks do not replace sensor replay or robot test
 
 ## License and attribution
 
-The package declares the [MIT license](LICENSE). Vendored components retain their
+The package declares the [MIT license](LICENSE). Upstream components retain their
 own notices; see [THIRD_PARTY.md](THIRD_PARTY.md). Please credit the original
 [Kinematic-ICP research](https://arxiv.org/abs/2410.10277) when using its method in
 academic work.

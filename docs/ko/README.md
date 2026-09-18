@@ -51,13 +51,14 @@ Estimate** 또는 `/initialpose`로 지정하세요. 전역 위치 탐색이나 
 
 ## 빌드
 
-Ubuntu 24.04, ROS 2 Jazzy, C++17 컴파일러, `colcon`, 초기화된 `rosdep`을 기준으로 합니다.
+Ubuntu 24.04, ROS 2 Jazzy, C++17 컴파일러, `colcon`, 초기화된 `rosdep`, Git,
+`patch` 도구를 기준으로 합니다.
 아래 명령은 Bash에서 실행합니다.
 
 ```bash
 source /opt/ros/jazzy/setup.bash
 mkdir -p ~/kinematic_ws/src
-git clone https://github.com/PARKasd/kinematic_localization.git \
+git clone --recurse-submodules https://github.com/PARKasd/kinematic_localization.git \
   ~/kinematic_ws/src/kinematic_localization
 cd ~/kinematic_ws
 rosdep update
@@ -66,9 +67,24 @@ colcon build --symlink-install --packages-select kinematic_localization
 source install/setup.bash
 ```
 
-Kinematic-ICP, KISS-ICP, Sophus, robin-map 소스와 라이선스는 저장소에 포함됩니다.
-Eigen과 TBB 등 시스템 의존성은 `rosdep`으로 설치합니다. 시스템 의존성이 설치되어
-있으면 포함된 C++ 라이브러리는 별도 다운로드 없이 빌드됩니다.
+Kinematic-ICP, KISS-ICP, Sophus, robin-map은 공식 upstream 저장소의 특정 커밋을
+가리키는 Git submodule입니다. 이미 복제한 저장소에서는 다음 명령으로 초기화하세요.
+
+```bash
+git submodule update --init --recursive
+```
+
+의존성 커밋이 변경된 내용을 pull한 뒤에도 위 명령을 실행하세요. 이후
+`colcon build --packages-select kinematic_localization --cmake-force-configure`로
+패치 적용 소스를 다시 생성합니다. GitHub 소스 ZIP에는
+submodule 내용이 없으므로 재귀 clone을 사용해야 합니다. Eigen과 TBB 등 시스템
+의존성은 `rosdep`으로 설치하고, `patch`가 없으면 `sudo apt-get install patch`로
+설치합니다. submodule과 시스템 의존성이 준비되면 빌드 중 추가 다운로드는 필요 없습니다.
+
+빌드는 [위치추정 패치](../../patches/kinematic-icp-localization.patch)와 KISS-ICP의
+Sophus 호환 패치를 빌드 디렉터리의 복사본에 적용합니다. submodule 작업 트리는
+수정하지 않습니다. 고정한 버전과 패치 관리 방법은 [THIRD_PARTY.md](../../THIRD_PARTY.md)를
+참고하세요.
 
 ## 맵 준비
 

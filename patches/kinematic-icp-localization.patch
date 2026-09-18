@@ -1,0 +1,443 @@
+--- a/cpp/kinematic_icp/pipeline/KinematicICP.hpp
++++ b/cpp/kinematic_icp/pipeline/KinematicICP.hpp
+@@ -57,6 +57,23 @@
+ 
+     // Motion compensation
+     bool deskew = false;
++
++    // Localization patch (2026_IFAC): keep the local map frozen (map-based localization,
++    // no map update from incoming scans). Upstream behavior is freeze_local_map = false.
++    bool freeze_local_map = false;
++
++    // Localization patch (2026_IFAC): soft non-holonomic lateral DoF (see
++    // Registration.cpp §6). Off = upstream hard-constraint behavior.
++    bool lateral_dof_enable = false;
++    double lateral_regularization_scale = 1.0;
++    double lateral_regularization_floor_tau2 = 1.0;
++
++    // Localization patch (2026_IFAC): registration-source-only downsample.
++    // > 0 replaces voxel_size in the source Voxelize() cascade ONLY — the map
++    // hash grid, correspondence search reach and adaptive-threshold floor keep
++    // using voxel_size, so the convergence basin is unchanged. <= 0 follows
++    // voxel_size (upstream behavior).
++    double source_voxel_size = -1.0;
+ };
+ 
+ class KinematicICP {
+@@ -69,7 +86,10 @@
+                         config.convergence_criterion,
+                         config.max_num_threads,
+                         config.use_adaptive_odometry_regularization,
+-                        config.fixed_regularization),
++                        config.fixed_regularization,
++                        config.lateral_dof_enable,
++                        config.lateral_regularization_scale,
++                        config.lateral_regularization_floor_tau2),
+           correspondence_threshold_(config.map_resolution(),
+                                     config.max_range,
+                                     config.use_adaptive_threshold,
+@@ -81,7 +101,10 @@
+     Vector3dVectorTuple RegisterFrame(const std::vector<Eigen::Vector3d> &frame,
+                                       const std::vector<double> &timestamps,
+                                       const Sophus::SE3d &lidar_to_base,
+-                                      const Sophus::SE3d &relative_odometry);
++                                      const Sophus::SE3d &relative_odometry,
++                                      // §8: drop all priors for this frame
++                                      const bool free_mode = false,
++                                      const int free_mode_max_iterations = 200);
+ 
+     inline void SetPose(const Sophus::SE3d &pose) {
+         last_pose_ = pose;
+@@ -97,6 +120,12 @@
+     const Sophus::SE3d &pose() const { return last_pose_; }
+     Sophus::SE3d &pose() { return last_pose_; }
+ 
++    // Localization patch (2026_IFAC): registration quality diagnostics of the
++    // most recent RegisterFrame call (see KinematicRegistration::Diagnostics).
++    const KinematicRegistration::Diagnostics &registrationDiagnostics() const {
++        return registration_.diagnostics();
++    }
++
+ protected:
+     Sophus::SE3d last_pose_;
+     // Kinematic module
+--- a/cpp/kinematic_icp/pipeline/KinematicICP.cpp
++++ b/cpp/kinematic_icp/pipeline/KinematicICP.cpp
+@@ -49,7 +49,9 @@
+     const std::vector<Eigen::Vector3d> &frame,
+     const std::vector<double> &timestamps,
+     const Sophus::SE3d &lidar_to_base,
+-    const Sophus::SE3d &relative_odometry) {
++    const Sophus::SE3d &relative_odometry,
++    const bool free_mode,
++    const int free_mode_max_iterations) {
+     // Need to deskew in lidar frame
+     const Sophus::SE3d &relative_odometry_in_lidar =
+         lidar_to_base.inverse() * relative_odometry * lidar_to_base;
+@@ -58,8 +60,12 @@
+     // Give the frame in base frame
+     const auto &preprocessed_frame_in_base = transform_points(preprocessed_frame, lidar_to_base);
+     // Voxelize
++    // Localization patch (2026_IFAC): the source cascade may use a finer,
++    // source-only voxel size (see Config::source_voxel_size).
++    const double source_voxel_size =
++        config_.source_voxel_size > 0.0 ? config_.source_voxel_size : config_.voxel_size;
+     const auto &[source, frame_downsample] =
+-        Voxelize(preprocessed_frame_in_base, config_.voxel_size);
++        Voxelize(preprocessed_frame_in_base, source_voxel_size);
+ 
+     // Get adaptive_threshold
+     const double tau = correspondence_threshold_.ComputeThreshold();
+@@ -69,14 +75,17 @@
+                                                            local_map_,         // voxel_map
+                                                            last_pose_,         // last_pose
+                                                            relative_odometry,  // robot_motion
+-                                                           tau);  // max_correspondence_dist
++                                                           tau,   // max_correspondence_dist
++                                                           free_mode, free_mode_max_iterations);
+ 
+     // Compute the difference between the prediction and the actual estimate
+     const auto odometry_error = (last_pose_ * relative_odometry).inverse() * new_pose;
+ 
+     // Update step: threshold, local map and the last pose
+     correspondence_threshold_.UpdateOdometryError(odometry_error);
+-    local_map_.Update(frame_downsample, new_pose);
++    // Localization patch (2026_IFAC): skip local map update when running in
++    // frozen-map localization mode (see Config::freeze_local_map).
++    if (!config_.freeze_local_map) local_map_.Update(frame_downsample, new_pose);
+     last_pose_ = new_pose;
+ 
+     // Return the (deskew) input raw scan (frame) and the points used for
+--- a/cpp/kinematic_icp/registration/Registration.hpp
++++ b/cpp/kinematic_icp/registration/Registration.hpp
+@@ -34,18 +34,60 @@
+                                    const double convergence_criterion,
+                                    const int max_num_threads,
+                                    const bool use_adaptive_odometry_regularization,
+-                                   const double fixed_regularization);
++                                   const double fixed_regularization,
++                                   // Localization patch (2026_IFAC): soft lateral DoF
++                                   const bool lateral_dof_enable = false,
++                                   const double lateral_regularization_scale = 1.0,
++                                   const double lateral_regularization_floor_tau2 = 1.0);
+ 
++    // Localization patch (2026_IFAC) §8: `free_mode` drops every prior-side
++    // constraint for this one frame — odometry regularization Omega, the
++    // lateral regularization floor, the iteration cap and the convergence
++    // early-exit. Used by the node in fast corners, where the measured pose
++    // error doubles (7.7 cm / 0.72 deg below 0.3 rad/s -> 16.1 cm / 2.03 deg
++    // above 0.8 rad/s).
++    //
++    // 🔴 Omega is what keeps JTJ invertible. With free_mode the solve is a
++    // bare Gauss-Newton step: in a geometrically degenerate view (long
++    // corridor, few walls) JTJ is singular and dx becomes non-finite. The
++    // caller MUST keep the non-finite pose rollback in place — such frames
++    // are dropped, not silently corrupted.
+     Sophus::SE3d ComputeRobotMotion(const std::vector<Eigen::Vector3d> &frame,
+                                     const kiss_icp::VoxelHashMap &voxel_map,
+                                     const Sophus::SE3d &last_robot_pose,
+                                     const Sophus::SE3d &relative_wheel_odometry,
+-                                    const double max_correspondence_distance);
++                                    const double max_correspondence_distance,
++                                    const bool free_mode = false,
++                                    const int free_mode_max_iterations = 200);
++
++    // Localization patch (2026_IFAC): registration quality diagnostics.
++    // Filled by every ComputeRobotMotion call from values it already computes
++    // (no extra data association). residual_rms / JTJ are taken at the entry
++    // of the *final* iteration, i.e. one iteration stale — negligible when
++    // converged, use `converged` + `final_dx_norm` to widen trust otherwise.
++    struct Diagnostics {
++        size_t num_correspondences = 0;  // last data association (0 = broken frame)
++        size_t num_source_points = 0;
++        double residual_rms = 0.0;
++        double threshold_tau = 0.0;
++        double beta = 0.0;      // odometry regularization weight actually used
++        bool free_mode = false;  // §8: this frame ran with all priors dropped
++        int iterations = 0;     // perturbation solves performed
++        bool converged = false;  // left the loop via dx.norm() < criterion
++        double final_dx_norm = 0.0;
++        Eigen::MatrixXd JTJ;  // normalized (/N), pre-regularization; 2x2, 3x3 with lateral DoF
++    };
++    const Diagnostics &diagnostics() const { return diag_; }
+ 
+     int max_num_iterations_;
+     double convergence_criterion_;
+     int max_num_threads_;
+     bool use_adaptive_odometry_regularization_;
+     double fixed_regularization_;
++    // Localization patch (2026_IFAC): soft non-holonomic lateral DoF (§6)
++    bool lateral_dof_enable_;
++    double lateral_regularization_scale_;
++    double lateral_regularization_floor_tau2_;
++    Diagnostics diag_;
+ };
+ }  // namespace kinematic_icp
+--- a/cpp/kinematic_icp/registration/Registration.cpp
++++ b/cpp/kinematic_icp/registration/Registration.cpp
+@@ -39,7 +39,6 @@
+ #include <sophus/so3.hpp>
+ #include <tuple>
+ 
+-using LinearSystem = std::pair<Eigen::Matrix2d, Eigen::Vector2d>;
+ using Correspondences = tbb::concurrent_vector<std::pair<Eigen::Vector3d, Eigen::Vector3d>>;
+ 
+ namespace {
+@@ -80,49 +79,81 @@
+     return correspondences;
+ }
+ 
+-Eigen::Vector2d ComputePerturbation(const Correspondences &correspondences,
+-                                    const Sophus::SE3d &current_estimate,
+-                                    const double beta) {
++// Localization patch (2026_IFAC): generalized over the perturbation dimension
++// D so the soft lateral DoF (D = 3, see §6 of the robustness plan) reuses the
++// same solver. D = 2 keeps the upstream arithmetic (same operations in the
++// same order); the extra sum of squared residual norms feeds the registration
++// diagnostics and does not touch the JTJ/JTr accumulation.
++template <int D>
++struct LinearSystem {
++    Eigen::Matrix<double, D, D> JTJ = Eigen::Matrix<double, D, D>::Zero();
++    Eigen::Matrix<double, D, 1> JTr = Eigen::Matrix<double, D, 1>::Zero();
++    double squared_residual_sum = 0.0;
++};
++
++template <int D>
++struct PerturbationResult {
++    Eigen::Matrix<double, D, 1> dx = Eigen::Matrix<double, D, 1>::Zero();
++    Eigen::Matrix<double, D, D> JTJ_normalized = Eigen::Matrix<double, D, D>::Zero();
++    double squared_residual_mean = 0.0;
++};
++
++template <int D>
++PerturbationResult<D> ComputePerturbation(const Correspondences &correspondences,
++                                          const Sophus::SE3d &current_estimate,
++                                          const Eigen::Matrix<double, D, D> &Omega) {
+     auto compute_jacobian_and_residual = [&](const auto &correspondence) {
+         const auto &[source, target] = correspondence;
+         const Eigen::Vector3d residual = current_estimate * source - target;
+-        Eigen::Matrix<double, 3, 2> J;
+-        J.col(0) = current_estimate.so3() * Eigen::Vector3d::UnitX();
+-        J.col(1) = current_estimate.so3() * Eigen::Vector3d(-source.y(), source.x(), 0.0);
++        Eigen::Matrix<double, 3, D> J;
++        if constexpr (D == 2) {
++            J.col(0) = current_estimate.so3() * Eigen::Vector3d::UnitX();
++            J.col(1) = current_estimate.so3() * Eigen::Vector3d(-source.y(), source.x(), 0.0);
++        } else {
++            J.col(0) = current_estimate.so3() * Eigen::Vector3d::UnitX();
++            J.col(1) = current_estimate.so3() * Eigen::Vector3d::UnitY();  // lateral (§6)
++            J.col(2) = current_estimate.so3() * Eigen::Vector3d(-source.y(), source.x(), 0.0);
++        }
+         return std::make_tuple(J, residual);
+     };
+ 
+-    auto sum_linear_systems = [](LinearSystem a, const LinearSystem &b) {
+-        a.first += b.first;
+-        a.second += b.second;
++    auto sum_linear_systems = [](LinearSystem<D> a, const LinearSystem<D> &b) {
++        a.JTJ += b.JTJ;
++        a.JTr += b.JTr;
++        a.squared_residual_sum += b.squared_residual_sum;
+         return a;
+     };
+ 
+     using correspondence_iterator = Correspondences::const_iterator;
+-    auto [JTJ, JTr] = tbb::parallel_reduce(
++    const LinearSystem<D> system = tbb::parallel_reduce(
+         // Range
+         tbb::blocked_range<correspondence_iterator>{correspondences.cbegin(),
+                                                     correspondences.cend()},
+         // Identity
+-        LinearSystem(Eigen::Matrix2d::Zero(), Eigen::Vector2d::Zero()),
++        LinearSystem<D>{},
+         // 1st Lambda: Parallel computation
+-        [&](const tbb::blocked_range<correspondence_iterator> &r, LinearSystem J) -> LinearSystem {
++        [&](const tbb::blocked_range<correspondence_iterator> &r,
++            LinearSystem<D> J) -> LinearSystem<D> {
+             return std::transform_reduce(
+                 r.begin(), r.end(), J, sum_linear_systems, [&](const auto &correspondence) {
+                     const auto &[J_r, residual] = compute_jacobian_and_residual(correspondence);
+-                    return LinearSystem(J_r.transpose() * J_r,        // JTJ
+-                                        J_r.transpose() * residual);  // JTr
++                    return LinearSystem<D>{J_r.transpose() * J_r,        // JTJ
++                                           J_r.transpose() * residual,   // JTr
++                                           residual.squaredNorm()};
+                 });
+         },
+         // 2nd Lambda: Parallel reduction of the private Jacboians
+         sum_linear_systems);
+     const double num_correspondences = static_cast<double>(correspondences.size());
+ 
+-    const Eigen::Matrix2d Omega = Eigen::Vector2d(beta, 0).asDiagonal();
+-    JTJ /= num_correspondences;
+-    JTr /= num_correspondences;
++    PerturbationResult<D> result;
++    result.JTJ_normalized = system.JTJ / num_correspondences;
++    result.squared_residual_mean = system.squared_residual_sum / num_correspondences;
++    Eigen::Matrix<double, D, D> JTJ = result.JTJ_normalized;
++    const Eigen::Matrix<double, D, 1> JTr = system.JTr / num_correspondences;
+     JTJ += Omega;
+-    return -(JTJ.inverse() * JTr);
++    result.dx = -(JTJ.inverse() * JTr);
++    return result;
+ }
+ 
+ }  // namespace
+@@ -133,7 +164,10 @@
+                                              const double convergence_criterion,
+                                              const int max_num_threads,
+                                              const bool use_adaptive_odometry_regularization,
+-                                             const double fixed_regularization)
++                                             const double fixed_regularization,
++                                             const bool lateral_dof_enable,
++                                             const double lateral_regularization_scale,
++                                             const double lateral_regularization_floor_tau2)
+     : max_num_iterations_(max_num_iteration),
+       convergence_criterion_(convergence_criterion),
+       // Only manipulate the number of threads if the user specifies something
+@@ -141,7 +175,11 @@
+       max_num_threads_(max_num_threads > 0 ? max_num_threads
+                                            : tbb::this_task_arena::max_concurrency()),
+       use_adaptive_odometry_regularization_(use_adaptive_odometry_regularization),
+-      fixed_regularization_(fixed_regularization) {
++      fixed_regularization_(fixed_regularization),
++      // Localization patch (2026_IFAC): soft lateral DoF (§6), default off
++      lateral_dof_enable_(lateral_dof_enable),
++      lateral_regularization_scale_(lateral_regularization_scale),
++      lateral_regularization_floor_tau2_(lateral_regularization_floor_tau2) {
+     // This global variable requires static duration storage to be able to
+     // manipulate the max concurrency from TBB across the entire class
+     static const auto tbb_control_settings = tbb::global_control(
+@@ -152,8 +190,16 @@
+                                                        const kiss_icp::VoxelHashMap &voxel_map,
+                                                        const Sophus::SE3d &last_robot_pose,
+                                                        const Sophus::SE3d &relative_wheel_odometry,
+-                                                       const double max_correspondence_distance) {
++                                                       const double max_correspondence_distance,
++                                                       const bool free_mode,
++                                                       const int free_mode_max_iterations) {
+     Sophus::SE3d current_estimate = last_robot_pose * relative_wheel_odometry;
++    // Localization patch (2026_IFAC): fresh per-frame diagnostics, also for the
++    // early-out paths (a stale snapshot on exactly the broken frames would
++    // poison the Mahalanobis gate that consumes these values).
++    diag_ = Diagnostics{};
++    diag_.num_source_points = frame.size();
++    diag_.threshold_tau = max_correspondence_distance;
+     if (voxel_map.Empty()) return current_estimate;
+ 
+     auto motion_model = [](const Eigen::Vector2d &integrated_controls) {
+@@ -165,8 +211,28 @@
+         dx(5) = theta;
+         return Sophus::SE3d::exp(dx);
+     };
++    // Localization patch (2026_IFAC): 3-DoF motion model for the soft lateral
++    // DoF (§6) — the correction is a free SE(2) tangent instead of the
++    // non-holonomic arc, the constraint moves into the regularizer Omega.
++    auto motion_model_lateral = [](const Eigen::Vector3d &controls) {
++        Sophus::SE3d::Tangent dx = Sophus::SE3d::Tangent::Zero();
++        dx(0) = controls(0);
++        dx(1) = controls(1);
++        dx(5) = controls(2);
++        return Sophus::SE3d::exp(dx);
++    };
+     auto correspondences =
+         DataAssociation(frame, voxel_map, current_estimate, max_correspondence_distance);
++    diag_.num_correspondences = correspondences.size();
++
++    // Localization patch (2026_IFAC): no correspondences -> return the odometry
++    // prediction without correction. The guard must sit above the
++    // regularization lambda because it covers two NaN paths at once:
++    //   1) ComputeOdometryRegularization: sum/N with N=0 -> NaN -> beta = NaN
++    //      (the default use_adaptive_odometry_regularization path)
++    //   2) ComputePerturbation: JTJ /= 0 -> NaN -> permanent last_pose_
++    //      pollution
++    if (correspondences.empty()) return current_estimate;
+ 
+     const double regularization_term = [&]() {
+         if (use_adaptive_odometry_regularization_) {
+@@ -175,15 +241,77 @@
+             return fixed_regularization_;
+         }
+     }();
++    diag_.beta = free_mode ? 0.0 : regularization_term;
++    diag_.free_mode = free_mode;
++    // §8 free_mode: no cap-driven early stop, run until the step vanishes.
++    const int iteration_budget = free_mode ? free_mode_max_iterations : max_num_iterations_;
+     // ICP-loop
+-    for (int j = 0; j < max_num_iterations_; ++j) {
+-        const auto dx = ComputePerturbation(correspondences, current_estimate, regularization_term);
+-        const auto delta_motion = motion_model(dx);
+-        current_estimate = current_estimate * delta_motion;
+-        // Break loop
+-        if (dx.norm() < convergence_criterion_) break;
+-        correspondences =
+-            DataAssociation(frame, voxel_map, current_estimate, max_correspondence_distance);
++    if (!lateral_dof_enable_) {
++        // Upstream 2-DoF path (longitudinal + yaw, non-holonomic arc) — the
++        // arithmetic is bit-identical to upstream when the lateral DoF is off.
++        const Eigen::Matrix2d Omega =
++            free_mode ? Eigen::Matrix2d::Zero()
++                      : Eigen::Matrix2d(Eigen::Vector2d(regularization_term, 0).asDiagonal());
++        for (int j = 0; j < iteration_budget; ++j) {
++            const auto solved = ComputePerturbation<2>(correspondences, current_estimate, Omega);
++            const auto &dx = solved.dx;
++            if (!dx.allFinite()) break;  // §8: Omega=0 -> JTJ can be singular
++            diag_.iterations = j + 1;
++            diag_.final_dx_norm = dx.norm();
++            diag_.residual_rms = std::sqrt(solved.squared_residual_mean);
++            diag_.JTJ = solved.JTJ_normalized;
++            const auto delta_motion = motion_model(dx);
++            current_estimate = current_estimate * delta_motion;
++            // Break loop. §8 free_mode: the convergence gate is dropped; only a
++            // numerically vanishing step (1e-9) stops the loop.
++            if (dx.norm() < (free_mode ? 1e-9 : convergence_criterion_)) {
++                diag_.converged = true;
++                break;
++            }
++            correspondences =
++                DataAssociation(frame, voxel_map, current_estimate, max_correspondence_distance);
++            diag_.num_correspondences = correspondences.size();
++            // Localization patch (2026_IFAC): stop when the re-association comes
++            // back empty — the next ComputePerturbation would divide by zero.
++            // break, not return: the recorded diagnostics of exactly these
++            // frames are what the gate needs.
++            if (correspondences.empty()) break;
++        }
++    } else {
++        // Localization patch (2026_IFAC): soft lateral DoF (§6). The wheel
++        // odometry's lateral information is exactly the no-side-slip prior, so
++        // beta_lat = scale * beta is its soft version. MSR < tau^2 by
++        // construction (DataAssociation only keeps distance < tau), hence
++        // beta > 1/tau^2 — the floor is specified as a multiple of that
++        // algebraic lower bound to keep the lateral DoF from opening fully on
++        // opponent/map mismatch frames (large-MSR, small-beta).
++        const double tau2 =
++            max_correspondence_distance * max_correspondence_distance;
++        const double beta_lat = std::max(lateral_regularization_floor_tau2_ / tau2,
++                                         lateral_regularization_scale_ * regularization_term);
++        const Eigen::Matrix3d Omega =
++            free_mode ? Eigen::Matrix3d::Zero()
++                      : Eigen::Matrix3d(
++                            Eigen::Vector3d(regularization_term, beta_lat, 0).asDiagonal());
++        for (int j = 0; j < iteration_budget; ++j) {
++            const auto solved = ComputePerturbation<3>(correspondences, current_estimate, Omega);
++            const auto &dx = solved.dx;
++            if (!dx.allFinite()) break;  // §8: Omega=0 -> JTJ can be singular
++            diag_.iterations = j + 1;
++            diag_.final_dx_norm = dx.norm();
++            diag_.residual_rms = std::sqrt(solved.squared_residual_mean);
++            diag_.JTJ = solved.JTJ_normalized;
++            const auto delta_motion = motion_model_lateral(dx);
++            current_estimate = current_estimate * delta_motion;
++            if (dx.norm() < (free_mode ? 1e-9 : convergence_criterion_)) {
++                diag_.converged = true;
++                break;
++            }
++            correspondences =
++                DataAssociation(frame, voxel_map, current_estimate, max_correspondence_distance);
++            diag_.num_correspondences = correspondences.size();
++            if (correspondences.empty()) break;
++        }
+     }
+     // Spit the final transformation
+     return current_estimate;

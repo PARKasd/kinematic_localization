@@ -1,0 +1,12 @@
+[submodule "third_party/kinematic-icp"]
+	path = third_party/kinematic-icp
+	url = https://github.com/PRBonn/kinematic-icp.git
+[submodule "third_party/kiss-icp"]
+	path = third_party/kiss-icp
+	url = https://github.com/PRBonn/kiss-icp.git
+[submodule "third_party/sophus"]
+	path = third_party/sophus
+	url = https://github.com/strasdat/Sophus.git
+[submodule "third_party/robin-map"]
+	path = third_party/robin-map
+	url = https://github.com/Tessil/robin-map.git
