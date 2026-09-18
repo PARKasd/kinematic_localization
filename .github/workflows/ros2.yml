@@ -1,0 +1,46 @@
+name: ROS 2 Jazzy
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-24.04
+    container: ros:jazzy-ros-base
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          apt-get update
+          rosdep update --rosdistro jazzy
+          rosdep install --from-paths src --ignore-src --rosdistro jazzy -r -y
+      - name: Build
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          colcon build --symlink-install --packages-select kinematic_localization --cmake-args -DBUILD_TESTING=ON
+      - name: Test
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          source install/setup.bash
+          colcon test --packages-select kinematic_localization --event-handlers console_direct+ --return-code-on-test-failure
+          colcon test-result --verbose
+      - name: Launch smoke test
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          source install/setup.bash
+          set +e
+          timeout --signal=INT 10s ros2 launch kinematic_localization kinematic_localization.launch.py > /tmp/localization-launch.log 2>&1
+          result=$?
+          set -e
+          cat /tmp/localization-launch.log
+          test "$result" -eq 124
+          grep -q 'kinematic_localization started' /tmp/localization-launch.log
+          if grep -E '\[ERROR\]|\[FATAL\]|process has died' /tmp/localization-launch.log; then exit 1; fi

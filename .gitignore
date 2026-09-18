@@ -1,0 +1,10 @@
+build/
+install/
+log/
+__pycache__/
+.pytest_cache/
+.DS_Store
+*.kissmap
+*.db3
+*.mcap
+*.bag
