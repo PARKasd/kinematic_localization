@@ -1,15 +1,20 @@
-# Kinematic Localization
+# Kinematic Localization for F1TENTH / RoboRacer
 
 [English](README.md) | [한국어](docs/ko/README.md)
 
-ROS 2 Jazzy map localization for a wheeled robot with a 2D LiDAR and wheel
-odometry. The package adapts [Kinematic-ICP](https://github.com/PRBonn/kinematic-icp)
+ROS 2 Jazzy LiDAR localization for **F1TENTH / RoboRacer autonomous racing**
+projects and other wheeled robots with a 2D LiDAR and wheel odometry.
+The package adapts [Kinematic-ICP](https://github.com/PRBonn/kinematic-icp)
 to align scans against a **fixed, previously built map**, publishing a pose in the
 `map` frame and the `map -> odom` transform.
 
 This repository contains the localization package, map-building utilities, tests,
 and the C++ libraries needed by the package. It does not include a planner,
 controller, simulator, recorded bags, or track maps. It builds without `f110_msgs`.
+
+**Keywords:** F1TENTH, F1/10, RoboRacer, autonomous racing, ROS 2 Jazzy,
+robot localization, 2D LiDAR localization, map-based localization, scan matching,
+Iterative Closest Point (ICP), Kinematic-ICP, wheel odometry, pose estimation.
 
 ## How it works
 

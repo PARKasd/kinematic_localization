@@ -1,14 +1,21 @@
-# Kinematic Localization
+# Kinematic Localization for F1TENTH / RoboRacer
 
 [English](../../README.md) | [한국어](README.md)
 
-2D LiDAR와 휠 오도메트리를 사용하는 이동 로봇용 ROS 2 Jazzy 위치추정 패키지입니다.
+**F1TENTH / RoboRacer 자율주행 레이싱** 프로젝트와 2D LiDAR·휠 오도메트리를
+사용하는 이동 로봇을 위한 ROS 2 Jazzy LiDAR 위치추정 패키지입니다.
 [Kinematic-ICP](https://github.com/PRBonn/kinematic-icp)를 기반으로 현재 스캔을
 **미리 만든 고정 맵**에 정합하고, `map` 좌표계의 자세와 `map -> odom` TF를 발행합니다.
 
 이 저장소에는 위치추정 패키지, 맵 생성 도구, 테스트, 필요한 C++ 라이브러리만 포함됩니다.
 플래너, 제어기, 시뮬레이터, 기록한 rosbag, 트랙 맵은 포함하지 않으며 `f110_msgs` 없이
 빌드할 수 있습니다.
+
+**키워드:** F1TENTH, F1/10, RoboRacer, 자율주행 레이싱(autonomous racing),
+ROS 2 Jazzy, 로봇 위치추정(robot localization), 2D LiDAR localization,
+맵 기반 위치추정(map-based localization), 스캔 정합(scan matching),
+Iterative Closest Point (ICP), Kinematic-ICP, 휠 오도메트리(wheel odometry),
+자세 추정(pose estimation).
 
 ## 동작 원리
 
